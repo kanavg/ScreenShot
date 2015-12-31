@@ -1,0 +1,59 @@
+diff --git a/include/android/input.h b/include/android/input.h
+index a660761..efddeb7 100644
+--- a/include/android/input.h
++++ b/include/android/input.h
+@@ -417,6 +417,7 @@ enum {
+     AMOTION_EVENT_TOOL_TYPE_STYLUS = 2,
+     AMOTION_EVENT_TOOL_TYPE_MOUSE = 3,
+     AMOTION_EVENT_TOOL_TYPE_ERASER = 4,
++    AMOTION_EVENT_TOOL_TYPE_FINGER_TOP_LEFT = 5,
+ };
+ 
+ /*
+diff --git a/services/inputflinger/InputReader.cpp b/services/inputflinger/InputReader.cpp
+index 8634e42..6a6bed2 100644
+--- a/services/inputflinger/InputReader.cpp
++++ b/services/inputflinger/InputReader.cpp
+@@ -4083,6 +4083,15 @@ void TouchInputMapper::dispatchTouches(nsecs_t when, uint32_t policyFlags) {
+                 mDownTime = when;
+             }
+ 
++
++            for (uint32_t i = 0; i < mCurrentCookedPointerData.pointerCount; i++) {
++                PointerCoords myPointerCoords = mCurrentCookedPointerData.pointerCoords[i];
++                if(isSpecialToolType(myPointerCoords.getAxisValue(AMOTION_EVENT_AXIS_X), myPointerCoords.getAxisValue(AMOTION_EVENT_AXIS_Y))) {
++                    mCurrentCookedPointerData.pointerProperties[i].toolType = AMOTION_EVENT_TOOL_TYPE_FINGER_TOP_LEFT;
++                    break;
++                }
++            }
++
+             dispatchMotion(when, policyFlags, mSource,
+                     AMOTION_EVENT_ACTION_POINTER_DOWN, 0, metaState, buttonState, 0,
+                     mCurrentCookedPointerData.pointerProperties,
+@@ -4094,6 +4103,14 @@ void TouchInputMapper::dispatchTouches(nsecs_t when, uint32_t policyFlags) {
+     }
+ }
+ 
++bool TouchInputMapper::isSpecialToolType(float x, float y) {
++    if(x <= 200.00 && y <= 200.00) {
++        return true;
++    } else {
++        return false;
++    }
++}
++
+ void TouchInputMapper::dispatchHoverExit(nsecs_t when, uint32_t policyFlags) {
+     if (mSentHoverEnter &&
+             (mCurrentCookedPointerData.hoveringIdBits.isEmpty()
+diff --git a/services/inputflinger/InputReader.h b/services/inputflinger/InputReader.h
+index c5896d4..a58a91d 100644
+--- a/services/inputflinger/InputReader.h
++++ b/services/inputflinger/InputReader.h
+@@ -1192,6 +1192,7 @@ public:
+ 
+     virtual void fadePointer();
+     virtual void timeoutExpired(nsecs_t when);
++    virtual bool isSpecialToolType(float x, float y);
+ 
+ protected:
+     CursorButtonAccumulator mCursorButtonAccumulator;
