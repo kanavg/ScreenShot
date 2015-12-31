@@ -1,0 +1,194 @@
+diff --git a/core/java/android/view/MotionEvent.java b/core/java/android/view/MotionEvent.java
+index 5e45c8f..b1a5e30 100644
+--- a/core/java/android/view/MotionEvent.java
++++ b/core/java/android/view/MotionEvent.java
+@@ -1285,6 +1285,14 @@ public final class MotionEvent extends InputEvent implements Parcelable {
+      * @see #getToolType
+      */
+     public static final int TOOL_TYPE_ERASER = 4;
++    
++    /**
++     * Tool type constant: The tool is a finger on the top left corner of the screen.
++     *
++     * @see #getToolType
++     * @hide
++     */
++    public static final int TOOL_TYPE_FINGER_TOP_LEFT = 5;
+ 
+     // NOTE: If you add a new tool type here you must also add it to:
+     //  native/include/android/input.h
+diff --git a/core/java/com/android/internal/widget/TopLeftPointerLocationView.java b/core/java/com/android/internal/widget/TopLeftPointerLocationView.java
+new file mode 100644
+index 0000000..6470926
+--- /dev/null
++++ b/core/java/com/android/internal/widget/TopLeftPointerLocationView.java
+@@ -0,0 +1,127 @@
++/*
++ * Copyright (C) 2010 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.internal.widget;
++
++import android.content.Context;
++import android.os.SystemProperties;
++import android.util.Log;
++import android.view.MotionEvent;
++import android.view.WindowManagerPolicy.PointerEventListener;
++import android.view.MotionEvent.PointerCoords;
++import android.content.ServiceConnection;
++import android.content.ComponentName;
++import android.content.Intent;
++import android.os.IBinder;
++import android.os.Message;
++import android.os.Messenger;
++import android.os.UserHandle;
++import android.os.Handler;
++import android.os.RemoteException;
++import android.view.GestureDetector;
++
++
++public class TopLeftPointerLocationView implements PointerEventListener {
++    private static final String TAG = "Pointer";
++
++    private Context mContext;
++    private GestureDetector mDetector;
++    final Object mScreenshotLock = new Object();
++    ServiceConnection mScreenshotConnection = null;
++
++    public TopLeftPointerLocationView(Context c) {
++        mContext = c;
++        mDetector = new GestureDetector(c, new MyGestureListener());
++    }
++
++
++    class MyGestureListener extends GestureDetector.SimpleOnGestureListener {
++
++        @Override
++        public boolean onDown(MotionEvent event) {
++            return true;
++        }
++
++        @Override
++        public boolean onDoubleTap(MotionEvent event) {
++            for (int i = 0; i < event.getPointerCount(); i++) {
++                int toolType = event.getToolType(i);
++                if (toolType == MotionEvent.TOOL_TYPE_FINGER_TOP_LEFT) {
++                    takeScreenshot();
++                }
++            }
++            return true;
++        }
++    }
++
++    @Override
++    public void onPointerEvent(MotionEvent event) {
++        if (mDetector.onTouchEvent(event)) {
++            return;
++        }
++    }
++
++    public void takeScreenshot() {
++        synchronized (mScreenshotLock) {
++            if (mScreenshotConnection != null) {
++                return;
++            }
++            ComponentName cn = new ComponentName("com.android.systemui",
++                    "com.android.systemui.screenshot.TakeScreenshotService");
++            Intent intent = new Intent();
++            intent.setComponent(cn);
++            ServiceConnection conn = new ServiceConnection() {
++                @Override
++                public void onServiceConnected(ComponentName name, IBinder service) {
++                    synchronized (mScreenshotLock) {
++                        if (mScreenshotConnection != this) {
++                            return;
++                        }
++                        Messenger messenger = new Messenger(service);
++                        Message msg = Message.obtain(null, 1);
++                        final ServiceConnection myConn = this;
++                        Handler h = new Handler() {
++                            @Override
++                            public void handleMessage(Message msg) {
++                                synchronized (mScreenshotLock) {
++                                    if (mScreenshotConnection == myConn) {
++                                        mContext.unbindService(mScreenshotConnection);
++                                        mScreenshotConnection = null;
++                                    }
++                                }
++                            }
++                        };
++                        msg.replyTo = new Messenger(h);
++                        msg.arg1 = msg.arg2 = 0;
++
++                        try {
++                            messenger.send(msg);
++                        } catch (RemoteException e) {
++                        }
++                    }
++                }
++
++                @Override
++                public void onServiceDisconnected(ComponentName name) {
++                }
++            };
++            if (mContext.bindServiceAsUser(
++                    intent, conn, Context.BIND_AUTO_CREATE, UserHandle.CURRENT)) {
++                mScreenshotConnection = conn;
++            }
++        }
++    }
++}
+diff --git a/policy/src/com/android/internal/policy/impl/PhoneWindowManager.java b/policy/src/com/android/internal/policy/impl/PhoneWindowManager.java
+index 5adf3a5..e964963 100644
+--- a/policy/src/com/android/internal/policy/impl/PhoneWindowManager.java
++++ b/policy/src/com/android/internal/policy/impl/PhoneWindowManager.java
+@@ -108,6 +108,7 @@ import com.android.internal.policy.impl.keyguard.KeyguardServiceDelegate;
+ import com.android.internal.policy.impl.keyguard.KeyguardServiceDelegate.ShowListener;
+ import com.android.internal.statusbar.IStatusBarService;
+ import com.android.internal.widget.PointerLocationView;
++import com.android.internal.widget.TopLeftPointerLocationView;
+ import com.android.server.LocalServices;
+ 
+ import java.io.File;
+@@ -384,6 +385,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+     IApplicationToken mFocusedApp;
+ 
+     PointerLocationView mPointerLocationView;
++    TopLeftPointerLocationView mTopLeftPointerLocationView;
+ 
+     // The current size of the screen; really; extends into the overscan area of
+     // the screen and doesn't account for any system elements like the status bar.
+@@ -1606,6 +1608,13 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+         }
+     }
+ 
++    private void enableMyPointerListener() {
++        if (mTopLeftPointerLocationView == null) {
++            mTopLeftPointerLocationView = new TopLeftPointerLocationView(mContext);
++            mWindowManagerFuncs.registerPointerEventListener(mTopLeftPointerLocationView);
++        }
++    }
++
+     private void disablePointerLocation() {
+         if (mPointerLocationView != null) {
+             mWindowManagerFuncs.unregisterPointerEventListener(mPointerLocationView);
+@@ -5559,6 +5568,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+         synchronized (mLock) {
+             updateOrientationListenerLp();
+             mSystemReady = true;
++            enableMyPointerListener();
+             mHandler.post(new Runnable() {
+                 @Override
+                 public void run() {
